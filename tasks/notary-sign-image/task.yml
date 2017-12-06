@@ -1,0 +1,28 @@
+---
+
+platform: linux
+
+
+image_resource:
+  type: docker-image
+  source: {repository: virtmerlin/docker-new}
+
+params:
+  HARBOR_USERNAME:
+  HARBOR_PASSWORD:
+  HARBOR_IMAGE:
+  HARBOR_URL:
+  HARBOR_CA_CERT:
+  HARBOR_CA_KEY:
+  HARBOR_CERT:
+  HARBOR_KEY:
+  NOTARY_FILE_1:
+  NOTARY_KEY_1:
+  NOTARY_FILE_2:
+  NOTARY_KEY_2:
+
+inputs:
+  - name: git-spring1-ci
+
+run:
+  path: git-spring1-ci/tasks/notary-sign-image/task.sh

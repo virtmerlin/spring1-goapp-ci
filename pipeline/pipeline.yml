@@ -1,0 +1,152 @@
+---
+clair_scan_params: &clair_scan_params
+  CLAIR_URL: {{clair_url}}
+  CLAIR_PORT: {{clair_port}}
+  CLAIR_HEALTH_PORT: {{clair_health_port}}
+  CLAIR_IMAGE: {{clair_image}}
+  CLAIR_INSECURE_REGISTRY: {{clair_insecure_registry}}
+  HARBOR_USERNAME: {{harbor_username}}
+  HARBOR_PASSWORD: {{harbor_password}}
+
+notary_sign_params: &notary_sign_params
+  HARBOR_USERNAME: {{harbor_username}}
+  HARBOR_URL: {{harbor_url}}
+  HARBOR_IMAGE: {{harbor_image}}
+  HARBOR_PASSWORD: {{harbor_password}}
+  HARBOR_CA_CERT: {{harbor_ca_cert}}
+  HARBOR_CA_KEY: {{harbor_ca_key}}
+  NOTARY_FILE_1: {{notary_file_1}}
+  NOTARY_KEY_1: {{notary_key_1}}
+  NOTARY_FILE_2: {{notary_file_2}}
+  NOTARY_KEY_2: {{notary_key_2}}
+groups:
+
+- name: Image-Pipeline
+  jobs:
+  - build-docker-image
+  - cve-scan-harbor-image
+  - sign-harbor-image
+
+- name: Kubernetes-Deployment
+  jobs:
+  - k8s-deployment
+
+
+
+resource_types:
+- name: kubernetes
+  type: docker-image
+  source:
+    repository: virtmerlin/concourse-kubernetes-resource
+
+resources:
+- name: git-spring1-ci
+  type: git
+  source:
+    uri: https://github.com/virtmerlin/spring1-goapp-ci
+    branch: master
+
+- name: git-go-http
+  type: git
+  source:
+    uri: https://github.com/tkrausjr/go-http
+    branch: master
+
+- name: harbor-image
+  type: docker-image
+  source:
+    username: {{harbor_username}}
+    password: {{harbor_password}}
+    repository: {{harbor_repository}}
+    insecure_registries:
+    - {{harbor_insecure_registry}}
+#    ca_certs:
+#    - domain: harbor-registry.vmwdri.local:443
+#      cert: |
+#        -----BEGIN CERTIFICATE-----
+#        some cert...
+#        -----END CERTIFICATE-----
+#    - domain: 10.190.63.153:443
+#      cert: |
+#        -----BEGIN CERTIFICATE-----
+#        some cert...
+#        -----END CERTIFICATE-----
+
+- name: kubernetes-deployment
+  type: kubernetes
+  source:
+    cluster_url: {{k8s_cluster_url}}
+    namespace: {{k8s_namespace}}
+    cluster_ca: {{k8s_ca_base64}}
+    admin_user: {{k8s_admin_user}}
+    admin_token: {{k8s_admin_token}}
+    resource_type: deployment
+    resource_name: go-http
+    resource_port: 8080
+    overwrite: true
+
+- name: kubernetes-service
+  type: kubernetes
+  source:
+    cluster_url: {{k8s_cluster_url}}
+    namespace: {{k8s_namespace}}
+    cluster_ca: {{k8s_ca_base64}}
+    admin_user: {{k8s_admin_user}}
+    admin_token: {{k8s_admin_token}}
+    resource_type: service
+    resource_name: svc-go-http
+    overwrite: true
+
+jobs:
+- name: build-docker-image
+  public: true
+  serial: true
+  plan:
+  - get: git-go-http
+    trigger: true
+  - put: harbor-image
+    params:
+      build: git-go-http
+
+- name: cve-scan-harbor-image
+  plan:
+  - aggregate:
+    - get: git-spring1-ci
+    - get: harbor-image
+      passed: [build-docker-image]
+      trigger: true
+  - task: clair-scan-image
+    file: git-spring1-ci/tasks/clair-scan-image/task.yml
+    params: *clair_scan_params
+
+- name: sign-harbor-image
+  plan:
+  - aggregate:
+    - get: git-spring1-ci
+    - get: harbor-image
+      passed: [cve-scan-harbor-image]
+      trigger: false
+  - task: notary-sign-image
+    privileged: true
+    file: git-spring1-ci/tasks/notary-sign-image/task.yml
+    params: *notary_sign_params
+
+- name: k8s-deployment
+  public: true
+  serial: true
+  plan:
+  - get: harbor-image
+    passed: [sign-harbor-image]
+    trigger: true
+  - put: kubernetes-deployment
+    params:
+      image_name: {{clair_image}}
+      image_tag: latest
+      port: 8080
+  - put: kubernetes-service
+    params:
+      service_name: svc-go-http
+      service_type: NodePort
+      deployment_name: go-http
+      service_port: 30001
+      target_port: 8080
